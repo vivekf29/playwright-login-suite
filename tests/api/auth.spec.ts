@@ -1,6 +1,8 @@
 import { apiUser } from '../../src/data/users';
 import { expect, test } from '../../src/fixtures/api';
 
+test.describe.configure({ mode: 'serial' });
+
 test.describe('DummyJSON auth API', () => {
   test('valid login returns an access token', async ({ api }) => {
     const response = await api.post('/auth/login', { data: apiUser });

@@ -5,8 +5,8 @@
   "description": "Playwright TypeScript suite for Sauce Demo login and DummyJSON API checks",
   "scripts": {
     "test": "playwright test",
-    "test:ui": "playwright test --project=ui",
-    "test:api": "playwright test --project=api",
+    "test:ui": "playwright test tests/ui",
+    "test:api": "playwright test tests/api",
     "report": "playwright show-report"
   },
   "devDependencies": {

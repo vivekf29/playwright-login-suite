@@ -1,5 +1,7 @@
 import { expect, test } from '../../src/fixtures/api';
 
+test.describe.configure({ mode: 'serial' });
+
 test.describe('DummyJSON products API', () => {
   test('product list is not empty', async ({ api }) => {
     const response = await api.get('/products');

@@ -17,7 +17,7 @@ npm run report
 
 | Script | What it runs |
 | --- | --- |
-| `npm test` | UI and API projects |
+| `npm test` | Sauce Demo and DummyJSON tests |
 | `npm run test:ui` | Sauce Demo only |
 | `npm run test:api` | DummyJSON only |
 | `npm run report` | Opens the last HTML report |
@@ -43,10 +43,9 @@ Jenkinsfile              the pipeline Jenkins executes
 
 `playwright.config.ts` is the entry point. `@playwright/test` loads it, finds files under `tests/`, and starts worker processes.
 
-Two projects share one config and write one report:
+One Chromium project runs every file under `tests/` and writes one report. The login specs use that browser. The API specs send HTTP through their own browser context, aimed at DummyJSON, and do not open the Sauce Demo page.
 
-- `ui` opens Chromium at `https://www.saucedemo.com`. `testMatch` limits it to `tests/ui`.
-- `api` matches `tests/api` and sets `baseURL` to `https://dummyjson.com`. It uses one worker.
+The editor's Playwright view shows a play button only for files in an enabled project. With two projects it enabled `ui` and hid `auth.spec.ts` and `products.spec.ts`. One project keeps the play button on all three spec files.
 
 `testIdAttribute: 'data-test'` tells `getByTestId()` to read Sauce Demo's attribute. The site uses `data-test`, not the Playwright default `data-testid`.
 
@@ -56,9 +55,9 @@ Two projects share one config and write one report:
 
 - `forbidOnly` fails the build if someone left `test.only` in the code. That would otherwise skip every other test and still look green.
 - `retries: 1` reruns a failed test once. A second failure is a real failure.
-- `workers: 1` on the whole run, plus the API project already limits itself to one worker. One worker is slower and easier to debug on a shared machine.
+- `workers: 1` on the whole run. One worker is slower and easier to debug on a shared machine.
 
-Locally those CI switches stay off, except the API project, which always uses one worker. DummyJSON stalls when many logins are sent together.
+Locally those CI switches stay off. Tests inside each API file still run one at a time, because DummyJSON stalls when many logins are sent together.
 
 ## UI tests and the page object
 
@@ -124,7 +123,7 @@ Playwright has two HTTP clients. The usual `request` fixture uses a standalone c
 
 `src/fixtures/api.ts` launches Chromium once per worker and opens a fresh browser context for each test. Tests call `api.post` and `api.get` on that context. Each test gets a new context so a login cookie from one test cannot authorize the next test. The "no token" case would be a false pass if the cookie leaked.
 
-The API project still does not open a page. It only borrows the browser's HTTP stack.
+These API tests still do not open the Sauce Demo page. They only borrow the browser's HTTP stack.
 
 ## Reports
 

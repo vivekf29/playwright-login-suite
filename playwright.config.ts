@@ -4,7 +4,7 @@ const isCI = !!process.env.CI;
 
 export default defineConfig({
   testDir: './tests',
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
   workers: isCI ? 1 : undefined,
@@ -22,21 +22,12 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'ui',
-      testMatch: /ui\/.*\.spec\.ts/,
+      // One project so the editor shows a play button in every spec file.
+      // The API specs open their own browser context and do not use this page.
+      name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
         baseURL: 'https://www.saucedemo.com',
-      },
-    },
-    {
-      name: 'api',
-      testMatch: /api\/.*\.spec\.ts/,
-      // One worker avoids bursting DummyJSON. These tests open Chromium
-      // themselves through src/fixtures/api.ts and do not use the page fixture.
-      workers: 1,
-      use: {
-        baseURL: 'https://dummyjson.com',
       },
     },
   ],
