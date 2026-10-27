@@ -1,0 +1,52 @@
+# CodeBuild runs this file. It is the Jenkinsfile for AWS:
+# install the locked dependencies, install Chromium, run the suite,
+# then keep the HTML report and the JUnit file.
+version: 0.2
+
+env:
+  variables:
+    # playwright.config.ts reads CI and turns on forbidOnly, one retry, and one worker.
+    CI: "true"
+    # Browsers live inside the workspace so the S3 cache in the stack can reuse them.
+    PLAYWRIGHT_BROWSERS_PATH: ".playwright-browsers"
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - node --version
+      - npm ci
+      # --with-deps installs the Ubuntu libraries Chromium needs. CodeBuild runs as root, so apt works.
+      - npx playwright install --with-deps chromium
+  build:
+    commands:
+      # Sync the report before exiting so a red run still lands in S3.
+      # CodeBuild's own artifact zip is uploaded only when this phase exits 0.
+      - |
+        set +e
+        npx playwright test
+        TEST_STATUS=$?
+        set -e
+        if [ -n "${REPORT_BUCKET}" ]; then
+          mkdir -p playwright-report test-results
+          aws s3 sync playwright-report "s3://${REPORT_BUCKET}/builds/${CODEBUILD_BUILD_NUMBER}/playwright-report" --only-show-errors
+          aws s3 sync test-results "s3://${REPORT_BUCKET}/builds/${CODEBUILD_BUILD_NUMBER}/test-results" --only-show-errors
+        fi
+        exit "${TEST_STATUS}"
+
+artifacts:
+  files:
+    - playwright-report/**/*
+    - test-results/**/*
+  discard-paths: no
+
+reports:
+  playwright:
+    files:
+      - test-results/junit.xml
+    file-format: JUNITXML
+
+cache:
+  paths:
+    - .playwright-browsers/**/*

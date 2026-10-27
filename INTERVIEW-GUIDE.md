@@ -138,6 +138,8 @@ D:\Playwright Project
   tsconfig.json             TypeScript settings for the editor
   playwright.config.ts      how Playwright runs
   Jenkinsfile               how Jenkins runs
+  buildspec.yml             how AWS CodeBuild runs the same steps
+  aws\playwright-codebuild.yml  the S3 bucket and the CodeBuild project
   .gitignore                files Git must not save
   README.md                 shorter study notes
   INTERVIEW-GUIDE.md        this document
@@ -693,7 +695,7 @@ post {
 
 **Why is the token checked twice?** Login returning a token is not enough. `GET /auth/me` proves the token is accepted. The call with no token proves the door is closed.
 
-**What does your CI do?** Build Now checks out `main` from GitHub, runs `npm ci`, installs Chromium, runs `npx playwright test`, publishes JUnit, and archives the HTML report. A failed test fails the build.
+**What does your CI do?** Build Now checks out `main` from GitHub, runs `npm ci`, installs Chromium, runs `npx playwright test`, publishes JUnit, and archives the HTML report. A failed test fails the build. AWS can run the same steps: `buildspec.yml` is the step list, and `aws/playwright-codebuild.yml` creates the CodeBuild project and the private S3 bucket that keeps the report. See the AWS section in `README.md`.
 
 **How does Jenkins get the code?** The job is Pipeline script from SCM. The Git URL is the public GitHub repository. `checkout scm` clones it. No GitHub password is stored.
 
