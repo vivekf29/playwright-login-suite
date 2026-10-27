@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Private S3 bucket for Playwright reports, and a CodeBuild project that
+  checks out the public GitHub repo, sets CI=true, and runs buildspec.yml.
+
+Parameters:
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/vivekf29/playwright-login-suite.git
+    Description: HTTPS clone URL of the public repository that contains buildspec.yml.
+    AllowedPattern: "^https://github\\.com/.+/.+\\.git$"
+  RepositoryBranch:
+    Type: String
+    Default: main
+    Description: Branch CodeBuild checks out.
+    AllowedPattern: "^[A-Za-z0-9._/-]+$"
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional. If set, AWS emails this address when the month's cost passes $5. Confirm the email AWS sends.
+    AllowedPattern: "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub playwright-login-suite-reports-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireReportsAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
+
+  ReportsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReportsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ReportsBucket.Arn
+              - !Sub ${ReportsBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: playwright-login-suite
+      ProviderType: GitHub
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/codebuild/playwright-login-suite
+      RetentionInDays: 14
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: playwright-login-suite-codebuild
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: playwright-login-suite-codebuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteBuildLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/playwright-login-suite
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/playwright-login-suite:*
+              - Sid: ReadAndWriteReports
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub ${ReportsBucket.Arn}/*
+              - Sid: ListReportBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt ReportsBucket.Arn
+              - Sid: PublishJUnitReport
+                Effect: Allow
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Resource: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/playwright-login-suite-*
+              - Sid: UseGitHubConnection
+                Effect: Allow
+                Action:
+                  - codeconnections:GetConnection
+                  - codeconnections:GetConnectionToken
+                  - codeconnections:UseConnection
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnection
+
+  PlaywrightProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: ReportsBucketPolicy
+    Properties:
+      Name: playwright-login-suite
+      Description: Runs the Playwright login suite and stores the HTML and JUnit reports.
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      TimeoutInMinutes: 20
+      SourceVersion: !Ref RepositoryBranch
+      Source:
+        Type: GITHUB
+        Location: !Ref RepositoryUrl
+        BuildSpec: buildspec.yml
+        GitCloneDepth: 1
+        ReportBuildStatus: false
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref GitHubConnection
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: CI
+            Value: "true"
+          - Name: REPORT_BUCKET
+            Value: !Ref ReportsBucket
+      Artifacts:
+        Type: S3
+        Location: !Ref ReportsBucket
+        Path: codebuild-artifacts
+        NamespaceType: BUILD_ID
+        Name: playwright-report.zip
+        Packaging: ZIP
+        EncryptionDisabled: false
+      Cache:
+        Type: S3
+        Location: !Sub ${ReportsBucket}/codebuild-cache
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref LogGroup
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasNotificationEmail
+    Properties:
+      Budget:
+        BudgetName: playwright-login-suite
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: "5"
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+
+Outputs:
+  ReportsBucketName:
+    Description: Private bucket that holds HTML reports, JUnit XML, and the browser cache.
+    Value: !Ref ReportsBucket
+  CodeBuildProjectName:
+    Description: Project to start in the CodeBuild console, or with aws codebuild start-build.
+    Value: !Ref PlaywrightProject
+  GitHubConnectionArn:
+    Description: Authorize this pending connection once before the first build.
+    Value: !Ref GitHubConnection
+  ConnectionConsoleUrl:
+    Description: Open this page, select the pending connection, and choose Update pending connection.
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/codesuite/settings/connections
+  LogGroupName:
+    Description: Terminal output for every build.
+    Value: !Ref LogGroup
+  ReportPrefix:
+    Description: Download builds/<number>/playwright-report/ and open index.html.
+    Value: !Sub s3://${ReportsBucket}/builds/

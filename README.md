@@ -1,8 +1,8 @@
 # Playwright login suite
 
-A small TypeScript suite you can run locally and from Jenkins. It checks the Sauce Demo login screen, including cases that must fail, and it checks the DummyJSON HTTP API. The same run writes an HTML report for people and a JUnit XML file for Jenkins.
+A small TypeScript suite you can run locally, from Jenkins, and from AWS CodeBuild. It checks the Sauce Demo login screen, including cases that must fail, and it checks the DummyJSON HTTP API. The same run writes an HTML report for people and a JUnit XML file for Jenkins and CodeBuild.
 
-This repository does not deploy a website. Jenkins checks out the code, installs what the tests need, runs them, and stores the report. That is continuous integration for a test suite.
+This repository does not deploy a website. Jenkins or CodeBuild checks out the code, installs what the tests need, runs them, and stores the report. That is continuous integration for a test suite.
 
 ## Run it
 
@@ -35,9 +35,12 @@ tests/ui/login.spec.ts   five login checks
 tests/api/auth.spec.ts   five auth checks
 tests/api/products.spec.ts
 Jenkinsfile              the pipeline Jenkins executes
+buildspec.yml            the same pipeline, for AWS CodeBuild
+aws/playwright-codebuild.yml
+                         S3 report bucket and the CodeBuild project
 ```
 
-`node_modules/`, `playwright-report/`, and `test-results/` are generated. They are gitignored. Jenkins creates them again on every build.
+`node_modules/`, `playwright-report/`, and `test-results/` are generated. They are gitignored. Jenkins and CodeBuild create them again on every build.
 
 ## How the runner is organized
 
@@ -155,6 +158,48 @@ GitHub cannot call this Jenkins, because Jenkins is only on localhost. Open the 
 
 The archived HTML report often will not render inside Jenkins. Jenkins serves each file as a download, and the report page needs its sibling CSS and script files. Download the archive, or run `npm run report` against a local `playwright-report` folder. If the HTML Publisher plugin is installed, the job can also publish the folder so the report opens inside Jenkins.
 
+## AWS
+
+CodeBuild is the same job as Jenkins, on a machine Amazon rents for the minutes the build is running. `buildspec.yml` is the step list. `aws/playwright-codebuild.yml` creates the pieces once:
+
+- A private S3 bucket, `playwright-login-suite-reports-<account id>`, for the HTML report, the JUnit file, and the Chromium cache. Files older than 30 days are removed. The bucket stays if you delete the stack, so empty it yourself before you create the stack again.
+- A CodeBuild project named `playwright-login-suite`. It uses the Ubuntu image `aws/codebuild/standard:7.0`, Node.js 20, and the `BUILD_GENERAL1_MEDIUM` size (7 GB of memory, above the 2 GB Chromium needs). The build stops after 20 minutes. The project sets `CI=true`, which turns on the stricter settings in `playwright.config.ts`.
+- A GitHub connection. CodeBuild uses it to clone the public repository. AWS still asks you to approve that connection once.
+- A CloudWatch log group, `/aws/codebuild/playwright-login-suite`, which keeps the terminal output for 14 days.
+- An optional budget. Pass your email and AWS mails you if the account's month-to-date cost passes $5. You must confirm that mail before the alarm is active.
+
+Sauce Demo and DummyJSON stay on the public internet. The stack is the build project, the report bucket, and the GitHub connection. The accounts in `src/data/users.ts` are the published demo users.
+
+Install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), run `aws configure` with an access key, then deploy:
+
+```powershell
+aws cloudformation deploy `
+  --stack-name playwright-login-suite `
+  --template-file aws/playwright-codebuild.yml `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --region us-east-1
+```
+
+To add the $5 mail, put your address on that same command: `--parameter-overrides NotificationEmail=you@example.com`.
+
+When the stack is finished, open the [Connections page in us-east-1](https://us-east-1.console.aws.amazon.com/codesuite/settings/connections), select `playwright-login-suite`, choose **Update pending connection**, and approve this repository. Then start a build:
+
+```powershell
+aws codebuild start-build --project-name playwright-login-suite --region us-east-1
+```
+
+You can also click **Start build** on the project in the CodeBuild console.
+
+When the build ends:
+
+- The log group has one line per test.
+- The CodeBuild **Reports** tab reads `test-results/junit.xml`. A failed test fails the build.
+- Every run, green or red, copies the HTML report to `builds/<number>/playwright-report/` in the bucket. Download that folder and open `index.html`. The page needs the CSS and script files next to it.
+- A green run also stores `playwright-report.zip` under `codebuild-artifacts/` and on the build's **Artifacts** tab.
+- The first build downloads Chromium. Later builds reuse the copy under `codebuild-cache/`.
+
+A push to GitHub does not start this project. Start it yourself, the same way you click **Build Now** in Jenkins. A schedule or a pipeline can come later.
+
 ## Short answers you can say out loud
 
 **What is this suite?** Thirteen Playwright tests. Five drive the Sauce Demo login page. Eight call DummyJSON and check status codes and JSON. Jenkins runs the same command and keeps the report.
@@ -165,6 +210,6 @@ The archived HTML report often will not render inside Jenkins. Jenkins serves ea
 
 **How is API testing different from UI testing here?** The UI test opens Chromium, fills a form, and asserts the next page. The API test sends HTTP and asserts status and body. The API test is faster and checks the contract directly. It does not prove the login screen is wired up. You want both.
 
-**What does CI do here?** On Build Now, Jenkins clones the public repo, installs dependencies from the lockfile, installs Chromium, runs `npx playwright test`, and publishes JUnit plus the HTML files. A failing test fails the build.
+**What does CI do here?** On Build Now, Jenkins clones the public repo, installs dependencies from the lockfile, installs Chromium, runs `npx playwright test`, and publishes JUnit plus the HTML files. A failing test fails the build. AWS CodeBuild runs that same sequence from `buildspec.yml` and stores the report in S3.
 
 **Why is the repo public?** This Jenkins has no GitHub credential. A public repo can be cloned with no token. The only credentials in the repo are public demo users.
